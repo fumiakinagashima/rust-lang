@@ -1,10 +1,12 @@
 mod lexer;
+mod parser;
 
 use std::env;
 use std::fs;
 use std::process::ExitCode;
 
 use lexer::Lexer;
+
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
