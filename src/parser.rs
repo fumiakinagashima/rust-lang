@@ -50,6 +50,34 @@ pub enum Expr {
 	},
 }
 
+pub type Block = Vec<Stmt>;
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+	Let {
+		name: String,
+		value: Expr,
+	},
+	Expr(Expr),
+	Block(Block),
+	If {
+		condition: Expr,
+		then_branch: Block,
+		else_branch: Option<Box<Stmt>>,
+	},
+	While {
+		condition: Expr,
+		body: Block,
+	},
+	For {
+		var: String,
+		iterable: Expr,
+		body: Block,
+	},
+	Return(Option<Expr>),
+	Break,
+	Continue,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
 	pub message: String,
@@ -69,6 +97,127 @@ impl Parser {
 
 	pub fn parse_expression(&mut self) -> Result<Expr, ParseError> {
 		self.parse_expr(0)
+	}
+
+	pub fn parse_program(&mut self) -> Result<Vec<Stmt>, ParseError> {
+		let mut stmts = Vec::new();
+		while self.peek_kind() != &TokenKind::Eof {
+			stmts.push(self.parse_stmt()?);
+		}
+		Ok(stmts)
+	}
+
+	fn parse_stmt(&mut self) -> Result<Stmt, ParseError> {
+		match self.peek_kind() {
+			TokenKind::Let => self.parse_let_stmt(),
+			TokenKind::If => self.parse_if_stmt(),
+			TokenKind::While => self.parse_while_stmt(),
+			TokenKind::For => self.parse_for_stmt(),
+			TokenKind::Return => self.parse_return_stmt(),
+			TokenKind::Break => {
+				self.advance();
+				self.expect(TokenKind::Semicolon, "expected ';' after 'break'")?;
+				Ok(Stmt::Break)
+			}
+			TokenKind::Continue => {
+				self.advance();
+				self.expect(TokenKind::Semicolon, "expected ';' after 'continue'")?;
+				Ok(Stmt::Continue)
+			}
+			TokenKind::LBrace => Ok(Stmt::Block(self.parse_block()?)),
+			_ => self.parse_expr_stmt(),
+		}
+	}
+
+	fn parse_let_stmt(&mut self) -> Result<Stmt, ParseError> {
+		self.advance();
+		let name = self.parse_ident()?;
+		self.expect(TokenKind::Eq, "expected '=' after variable name")?;
+		let value = self.parse_expression()?;
+		self.expect(TokenKind::Semicolon, "expected ';' after let statement")?;
+		
+		Ok(Stmt::Let { name, value })
+	}
+
+	fn parse_if_stmt(&mut self) -> Result<Stmt, ParseError> {
+		self.advance();
+		self.expect(TokenKind::LParen, "expected '(' after 'if'")?;
+		let condition = self.parse_expression()?;
+		self.expect(TokenKind::RParen, "expected ')' after if condition")?;
+		let then_branch = self.parse_block()?;
+
+		let else_branch = if self.peek_kind() == &TokenKind::Else {
+			self.advance();
+			if self.peek_kind() == &TokenKind::If {
+				Some(Box::new(self.parse_if_stmt()?))
+			} else {
+				Some(Box::new(Stmt::Block(self.parse_block()?)))
+			}
+		} else {
+			None
+		};
+
+		Ok(Stmt::If { condition, then_branch, else_branch })
+	}
+
+	fn parse_while_stmt(&mut self) -> Result<Stmt, ParseError> {
+		self.advance();
+		self.expect(TokenKind::LParen, "expected '(' after 'while'")?;
+		let condition = self.parse_expression()?;
+		self.expect(TokenKind::RParen, "expected ')' after while condition")?;
+		let body = self.parse_block()?;
+
+		Ok(Stmt::While { condition, body })
+	}
+
+	fn parse_for_stmt(&mut self) -> Result<Stmt, ParseError> {
+		self.advance();
+		self.expect(TokenKind::LParen, "expected '(' after 'for'")?;
+		let var = self.parse_ident()?;
+		self.expect(TokenKind::In, "expected 'in' after for-loop variable")?;
+		let iterable = self.parse_expression()?;
+		self.expect(TokenKind::RParen, "expected ')' after for-loop header")?;
+		let body = self.parse_block()?;
+
+		Ok(Stmt::For { var, iterable, body })
+	}
+
+	fn parse_return_stmt(&mut self) -> Result<Stmt, ParseError> {
+		self.advance();
+		let value = if self.peek_kind() == &TokenKind::Semicolon {
+			None
+		} else {
+			Some(self.parse_expression()?)
+		};
+		self.expect(TokenKind::Semicolon, "expected ';' after return statement")?;
+
+		Ok(Stmt::Return(value))
+	}
+
+	fn parse_expr_stmt(&mut self) -> Result<Stmt, ParseError> {
+		let expr = self.parse_expression()?;
+		self.expect(TokenKind::Semicolon, "expected ';' after expression statement")?;
+
+		Ok(Stmt::Expr(expr))
+	}
+
+	fn parse_block(&mut self) -> Result<Block, ParseError> {
+		self.expect(TokenKind::LBrace, "expected '{'")?;
+		let mut stmts = Vec::new();
+		while self.peek_kind() != &TokenKind::RBrace {
+			stmts.push(self.parse_stmt()?);
+		}
+		self.expect(TokenKind::RBrace, "expected '}'")?;
+
+		Ok(stmts)
+	}
+
+	fn parse_ident(&mut self) -> Result<String, ParseError> {
+		let token = self.advance();
+		match token.kind {
+			TokenKind::Ident(name) => Ok(name),
+			other => Err(self.error(token.line, token.column, format!("expected identifier, found{other:?}"))),
+		}
 	}
 
 	fn parse_expr(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
@@ -382,6 +531,104 @@ mod tests {
 		assert!(Parser::new(tokens).parse_expression().is_err());
 	}
 
+	fn parse_program(source: &str) -> Vec<Stmt> {
+		let tokens = Lexer::new(source).tokenize().unwrap();
+		Parser::new(tokens).parse_program().unwrap()
+	}
+
+	#[test]
+	fn let_statement() {
+		assert_eq!(
+			parse_program("let x = 1 + 2;"),
+			vec![Stmt::Let {
+				name: "x".to_string(),
+				value: Expr::Binary {
+					op: BinaryOp::Add,
+					left: Box::new(Expr::Int(1)),
+					right: Box::new(Expr::Int(2)),
+				},
+			}]
+		);
+	}
+
+	#[test]
+	fn if_else_statement() {
+		assert_eq!(
+			parse_program("if (x > 5) { x; } else { 0; }"),
+			vec![Stmt::If {
+				condition: Expr::Binary {
+					op: BinaryOp::Gt,
+					left: Box::new(Expr::Ident("x".to_string())),
+					right: Box::new(Expr::Int(5)),
+				},
+				then_branch: vec![Stmt::Expr(Expr::Ident("x".to_string()))],
+				else_branch: Some(Box::new(Stmt::Block(vec![Stmt::Expr(Expr::Int(0))]))),
+			}]
+		);
+	}
+
+	#[test]
+	fn else_if_chain() {
+		assert_eq!(
+			parse_program("if (a) { 1; } else if (b) { 2; } else { 3; }"),
+			vec![Stmt::If {
+				condition: Expr::Ident("a".to_string()),
+				then_branch: vec![Stmt::Expr(Expr::Int(1))],
+				else_branch: Some(Box::new(Stmt::If {
+					condition: Expr::Ident("b".to_string()),
+					then_branch: vec![Stmt::Expr(Expr::Int(2))],
+					else_branch: Some(Box::new(Stmt::Block(vec![Stmt::Expr(Expr::Int(3))]))),
+				})),
+			}]
+		);
+	}
+
+	#[test]
+	fn while_statement() {
+		assert_eq!(
+			parse_program("while (x < 10) { x; }"),
+			vec![Stmt::While {
+				condition: Expr::Binary {
+					op: BinaryOp::Lt,
+					left: Box::new(Expr::Ident("x".to_string())),
+					right: Box::new(Expr::Int(10)),
+				},
+				body: vec![Stmt::Expr(Expr::Ident("x".to_string()))],
+			}]
+		);
+	}
+
+	#[test]
+	fn for_statement() {
+		assert_eq!(
+			parse_program("for (item in arr) { item; }"),
+			vec![Stmt::For {
+				var: "item".to_string(),
+				iterable: Expr::Ident("arr".to_string()),
+				body: vec![Stmt::Expr(Expr::Ident("item".to_string()))],
+			}]
+		);
+	}
+
+	#[test]
+	fn return_break_continue_statements() {
+		assert_eq!(
+			parse_program("return 1; return; break; continue;"),
+			vec![
+				Stmt::Return(Some(Expr::Int(1))),
+				Stmt::Return(None),
+				Stmt::Break,
+				Stmt::Continue,
+			]
+		);
+	}
+
+	#[test]
+	fn missing_semicolon_is_error() {
+		let tokens = Lexer::new("let x = 1").tokenize().unwrap();
+		assert!(Parser::new(tokens).parse_program().is_err());
+	}
+	
 	#[test]
 	fn missing_closing_bracket_is_error() {
 		let tokens = Lexer::new("arr[0").tokenize().unwrap();

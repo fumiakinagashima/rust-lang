@@ -6,6 +6,7 @@ use std::fs;
 use std::process::ExitCode;
 
 use lexer::Lexer;
+use parser::Parser;
 
 
 fn main() -> ExitCode {
@@ -23,16 +24,24 @@ fn main() -> ExitCode {
         }
     };
 
-    match Lexer::new(&source).tokenize() {
-        Ok(tokens) => {
-            for token in tokens {
-                println!("{token:?}");
+    let tokens = match Lexer::new(&source).tokenize() {
+        Ok(tokens) => tokens,
+        Err(err) => {
+            eprintln!("na: lex error ({}:{}): {}", err.line, err.column, err.message);
+            return ExitCode::FAILURE
+        }
+    };
+
+    match Parser::new(tokens).parse_program() {
+        Ok(program) => {
+            for stmt in program {
+                println!("{stmt:#?}");
             }
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("na: lex error ({}:{}): {}", err.line, err.column, err.message);
-            return ExitCode::FAILURE
+            eprintln!("na parse error ({}:{}): {}", err.line, err.column, err.message);
+            ExitCode::FAILURE
         }
     }
 }
