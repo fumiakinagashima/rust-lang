@@ -1,5 +1,6 @@
 mod lexer;
 mod parser;
+mod typecheck;
 
 use std::env;
 use std::fs;
@@ -7,7 +8,7 @@ use std::process::ExitCode;
 
 use lexer::Lexer;
 use parser::Parser;
-
+use typecheck::TypeChecker;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -32,16 +33,21 @@ fn main() -> ExitCode {
         }
     };
 
-    match Parser::new(tokens).parse_program() {
-        Ok(program) => {
-            for stmt in program {
-                println!("{stmt:#?}");
-            }
-            ExitCode::SUCCESS
-        }
+    let program = match Parser::new(tokens).parse_program() {
+        Ok(program) => program,
         Err(err) => {
             eprintln!("na parse error ({}:{}): {}", err.line, err.column, err.message);
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
+    };
+
+    if let Err(err) = TypeChecker::new().check_program(&program) {
+        eprintln!("na: type error ({}:{}): {}", err.line, err.column, err.message);
+        return ExitCode::FAILURE;
     }
+
+    for stmt in program {
+        println!("{stmt:#?}");
+    }
+    ExitCode::SUCCESS
 }
